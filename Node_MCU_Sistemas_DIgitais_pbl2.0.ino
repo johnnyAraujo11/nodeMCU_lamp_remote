@@ -1,4 +1,4 @@
-  #include <ESP8266WiFi.h>
+#include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 extern "C" {
 #include "libb64/cdecode.h"
@@ -10,7 +10,6 @@ extern "C" {
 
 
 
-
 //Definindo o cliente para conectar ao AWS
 WiFiClientSecure wiFiClient;
 
@@ -19,41 +18,40 @@ WiFiUDP ntpUDP;
 // cliente ntp, servidor do horário no Brasil, o fuso horário do Brasil -3 * 3600(s) = 3 horas
 NTPClient timeClient(ntpUDP, "c.st1.ntp.br", -3 * 3600, 60000);
 
-// Definido os dias da semana para serem utilizados na programação dos horários da lâmpada
-char day_of_week[7][14] = {"Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"};
+void msgReceived(char* topic, byte* payload, unsigned int len);
+PubSubClient pubSubClient(AWS_ENDPOINT, 8883, msgReceived, wiFiClient);
 
 
-boolean StateLam = true;
-char ligar = '1';
-char desligar = '0';
-String top = "lamp";
+#define swapState  D3    //Definido o botão para pull-up no próprio node mcu 
 
+char StateLamp  = 'l'; //Indica que está ligado
+char _on = '1';
+char _off= '0';
+char* topico2 = "lamp";
 
 // Função que ler a publicação e exibe a msg no monitor serial
+
 void msgReceived(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message received on "); Serial.print(topic); Serial.print(": ");
   for (int i = 0; i < length; i++) {
     Serial.print((char)payload[i]);
   }
- 
-   Serial.print("O topico é: "); Serial.println( top.compareTo(topic));
-   if(ligar == payload[0]){
+   Serial.print("O topico é: "); Serial.println(topic);
+  if(topico2 == "lamp"){
+    if(_on == payload[0]){
        digitalWrite(D1, HIGH);
-       StateLam = true;
-   }else if(desligar == payload[0]){
-      digitalWrite(D1,LOW);
-      StateLam = false;
+       StateLamp  = 'l';
+       pubSubClient.publish("stateLamp", &StateLamp ); // Publica o estado da lâmpada
+     }else if(_off == payload[0]){
+       digitalWrite(D1,LOW);
+       StateLamp  = 'd';
+       pubSubClient.publish("stateLamp", &StateLamp ); // Publica o estado da lâmpada
+     }
    }
-     
-}
+ }
 
 
 
-void msgReceived(char* topic, byte* payload, unsigned int len);
-PubSubClient pubSubClient(AWS_ENDPOINT, 8883, msgReceived, wiFiClient);
-
-
-//-----------------------------------------------------------------------
 void setCurrentTime() {
   configTime(3 * 3600, 0, "br.pool.ntp.org", "time.nist.gov");
   Serial.print("Waiting for NTP time sync: ");
@@ -73,7 +71,6 @@ void setCurrentTime() {
 }
 
 
-//-----------------------------------------------------------------------
 //Decodifica o certificado, chave e root
 int b64decode(String b64Text, uint8_t* output) {
   base64_decodestate s;
@@ -83,7 +80,7 @@ int b64decode(String b64Text, uint8_t* output) {
 }
 
 
-// Coneta o cliente com o AWS IOT Core para poder usar o MQTT
+// Conecta o cliente com o AWS IOT Core para poder usar o MQTT
 void pubSubCheckConnect() {
   if ( ! pubSubClient.connected()) {
     Serial.print("PubSubClient connecting to: "); Serial.print(AWS_ENDPOINT);
@@ -92,14 +89,13 @@ void pubSubCheckConnect() {
       Serial.print(".");
       pubSubClient.connect("esp8266-lampada");
     }
+    //Publica ao conectar indicando que se conectou, e o estado da lâmpada
+    pubSubClient.publish("alive", "1");
+    pubSubClient.publish("stateLamp", &StateLamp ); 
     Serial.println(" connected");
     pubSubClient.subscribe("lamp");
-    pubSubClient.subscribe("acao");
-
-   // Publica no tópico a mensagem
-   // pubSubClient.publish("barra","Estou publicando");
   }
-  //pubSubClient.loop();
+  
 }
 
 // Conexão com o wifi local
@@ -128,33 +124,53 @@ void decoder(){
 }
 
 /* A cada intervalo de e 30 segundos envia um publicação
-para informar à aplicação web que o disositivo está onlaine*/
+para informar à aplicação web que o dispositivo está online*/
+
 void heartBeat(int sec){
-  if(sec == 30 || sec == 0)
-      pubSubClient.publish("alive", "1");
+  if(sec == 30 || sec == 0  || sec == 15 || sec == 45){
+  pubSubClient.publish("alive", "1"); //Publicação o para poder resetar o contador da aplicação web, indicando que está conectado
+  pubSubClient.publish("stateLamp", &StateLamp ); // Publica o estado da lâmpada
+  } 
 }
 
 
+void interrupter(){
+  if(digitalRead(swapState) == LOW){
+    digitalWrite(D1, !digitalRead(D1));
+    if(StateLamp  == 'l'){
+      StateLamp = 'd';
+      pubSubClient.publish("stateLamp", &StateLamp );
+    }else {
+      StateLamp = 'l';
+      pubSubClient.publish("stateLamp", &StateLamp );
+    }
+    
+  }
+}
+
+
+/* Configuração incial*/
 void setup() {
   pinMode(D1, OUTPUT);
-  digitalWrite(D1,HIGH); // A lâmpada sempre inicia ligada
-  connectWifi(); // conectar ao wifi
-  setCurrentTime(); // Sincronização do tempo para iniciar a conexão com o aws
-  timeClient.begin(); //Iniciar o cliente NTP para obter hora atual
+  pinMode(swapState, INPUT_PULLUP);
+  digitalWrite(D1,HIGH);  // A lâmpada sempre inicia ligada
+  connectWifi();          // conectar ao wifi
+  setCurrentTime();       // Sincronização do tempo para iniciar a conexão com o aws
+  timeClient.begin();     //Iniciar o cliente NTP para obter hora atual
   decoder();
-
+ 
 }
 
 
 void loop() {
+  if(WiFi.status() != WL_CONNECTED){
+    connectWifi();
+    Serial.println("caiu a conexão");
+  }
+   pubSubCheckConnect();
    timeClient.update(); // Atualiza a hora
    heartBeat(timeClient.getSeconds());
-   
-   pubSubCheckConnect();
    pubSubClient.loop(); //Exetuta funções internas para identificar novas publicações recebidas
-    
-   String now_hour = timeClient.getFormattedTime();
-   Serial.println(now_hour);
+   interrupter();
    delay(1000);
-   
 }

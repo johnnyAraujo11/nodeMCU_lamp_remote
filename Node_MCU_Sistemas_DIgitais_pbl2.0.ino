@@ -1,13 +1,9 @@
-#include <ESP8266WiFi.h>
-#include <PubSubClient.h>
-extern "C" {
-#include "libb64/cdecode.h"
-}
+#include <ESP8266WiFi.h> //Para utilizar o esp com wifi
+#include <PubSubClient.h> // Conecatar ao AWS IoT Core usando o endpint
+extern "C" {#include "libb64/cdecode.h"}
 #include <restricted.h> // Onde estão definidos os dados sensíveis do wifi e certificado , chave e root da AWS IOT Core
-
-#include <WiFiUdp.h>
+#include <WiFiUdp.h> 
 #include <NTPClient.h>
-
 
 
 //Definindo o cliente para conectar ao AWS
@@ -24,13 +20,12 @@ PubSubClient pubSubClient(AWS_ENDPOINT, 8883, msgReceived, wiFiClient);
 
 #define swapState  D3    //Definido o botão para pull-up no próprio node mcu 
 
-char StateLamp  = 'l'; //Indica que está ligado
+char StateLamp  = 'l'; //Indica que está ligado, pois foi acordado que sempre quando iniciar o node ele já indica o estado de ligado
 char _on = '1';
 char _off= '0';
 char* topico2 = "lamp";
 
-// Função que ler a publicação e exibe a msg no monitor serial
-
+// Função identifica a chegada de novas publicações e exibe a msg no monitor serial
 void msgReceived(char* topic, byte* payload, unsigned int length) {
   Serial.print("Message received on "); Serial.print(topic); Serial.print(": ");
   for (int i = 0; i < length; i++) {
@@ -113,27 +108,25 @@ void decoder(){
   uint8_t binaryCert[certificatePemCrt.length() * 3 / 4];
   int len = b64decode(certificatePemCrt, binaryCert);
   wiFiClient.setCertificate(binaryCert, len);
-  
   uint8_t binaryPrivate[privatePemKey.length() * 3 / 4];
   len = b64decode(privatePemKey, binaryPrivate);
   wiFiClient.setPrivateKey(binaryPrivate, len);
-
   uint8_t binaryCA[caPemCrt.length() * 3 / 4];
   len = b64decode(caPemCrt, binaryCA);
   wiFiClient.setCACert(binaryCA, len);
 }
 
-/* A cada intervalo de e 30 segundos envia um publicação
+/* A cada intervalo de e 15 segundos envia um publicação
 para informar à aplicação web que o dispositivo está online*/
-
 void heartBeat(int sec){
-  if(sec == 30 || sec == 0  || sec == 15 || sec == 45){
-  pubSubClient.publish("alive", "1"); //Publicação o para poder resetar o contador da aplicação web, indicando que está conectado
-  pubSubClient.publish("stateLamp", &StateLamp ); // Publica o estado da lâmpada
+  if(sec == 0 || sec == 15  || sec == 30 || sec == 45){
+    pubSubClient.publish("alive", "1"); //Publicação o para poder resetar o contador da aplicação web, indicando que está conectado
+    pubSubClient.publish("stateLamp", &StateLamp ); // Publica o estado da lâmpada
   } 
 }
 
 
+// Função que utiliza o botão flash da placa como um interruptor.
 void interrupter(){
   if(digitalRead(swapState) == LOW){
     digitalWrite(D1, !digitalRead(D1));
@@ -144,7 +137,6 @@ void interrupter(){
       StateLamp = 'l';
       pubSubClient.publish("stateLamp", &StateLamp );
     }
-    
   }
 }
 
@@ -157,20 +149,15 @@ void setup() {
   connectWifi();          // conectar ao wifi
   setCurrentTime();       // Sincronização do tempo para iniciar a conexão com o aws
   timeClient.begin();     //Iniciar o cliente NTP para obter hora atual
-  decoder();
- 
+  decoder();             
 }
 
 
 void loop() {
-  if(WiFi.status() != WL_CONNECTED){
-    connectWifi();
-    Serial.println("caiu a conexão");
-  }
-   pubSubCheckConnect();
+   pubSubCheckConnect(); 
    timeClient.update(); // Atualiza a hora
-   heartBeat(timeClient.getSeconds());
-   pubSubClient.loop(); //Exetuta funções internas para identificar novas publicações recebidas
+   heartBeat(timeClient.getSeconds()); // Passa como parâmetro o segundo no momento
+   pubSubClient.loop(); //Executa funções internas para identificar novas publicações recebidas
    interrupter();
    delay(1000);
 }
